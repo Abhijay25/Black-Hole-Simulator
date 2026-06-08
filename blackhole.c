@@ -10,6 +10,6 @@ Blackhole blackhole_init(Vec3 position, double mass) {
     return bh;
 }
 
-void draw(Blackhole bh) {
+void blackhole_draw(Blackhole bh) {
     DrawCircle((int)bh.position.x, (int)bh.position.y, (float)bh.EventHorizon, BLACK);
 }

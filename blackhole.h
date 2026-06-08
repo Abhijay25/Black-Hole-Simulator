@@ -12,6 +12,6 @@ typedef struct {
 } Blackhole;
 
 Blackhole blackhole_init(Vec3 position, double mass);
-void draw(Blackhole bh);
+void blackhole_draw(Blackhole bh);
 
 #endif // BLACKHOLE_H

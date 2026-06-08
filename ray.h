@@ -6,14 +6,21 @@
 #include "blackhole.h"
 
 typedef struct {
-    Vec3 origin;
+    float x;
+    float y;
+    float z;
+
+    float r;
+    float phi;
     Vec3 direction;
+
+    // Trail of the ray for visualization
     Vec3 path[MAX_PATH];
     int path_index;
-} Ray;
+} Photon;
 
-Ray ray_init(Vec3 origin, Vec3 direction);
-void draw(Ray ray);
-void step(Ray *ray);
+Photon photon_init(Vec3 origin, Vec3 direction);
+void photon_draw(Photon ray);
+void step(Photon *ray, Blackhole *bh);
 
 #endif // RAY_H
