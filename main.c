@@ -186,7 +186,7 @@ int main(void) {
     .diskThick  = 0.065f * rs_c,
   };
   srand((unsigned)time(NULL));   // remove for a fixed layout each run
-  spawn_objects(&uboData, 5, rs_c);   // change 5 to spawn more/fewer
+  spawn_objects(&uboData, 3, rs_c);   // change 5 to spawn more/fewer
 
   int firstFrame = 1;  // ignore the startup mouse spike
 
