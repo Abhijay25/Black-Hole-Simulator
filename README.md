@@ -5,7 +5,7 @@ Made this start learning C while also making something fun.
 
 ## Tech Stack
 
-- **C** — core simulation and rendering glue
+- **C** — core simulation and rendering
 - **raylib 5.5** — windowing, input, 3D rasterization (spacetime mesh), texture compositing
 - **OpenGL 4.3 compute shader** (GLSL) — GPU geodesic ray tracing for the black hole shadow, gravitationally lensed accretion disk, and lensed background objects (`geodesic.comp`)
 - **Nix flake** — reproducible dev environment (`flake.nix`)
@@ -15,10 +15,61 @@ Physics: full Schwarzschild geodesics integrated per-photon with RK4. Each ray i
 
 ## Build & Run
 
+You need a C compiler, `make`, `pkg-config`, **raylib 5.5+**, and an OpenGL driver
+(the GPU must support OpenGL 4.3 compute shaders — anything from ~2013 onward).
+
+### Nix (reproducible)
+
 ```sh
 nix develop      # enter the dev shell (provides gcc, raylib, libGL)
 make
 ./blackhole      # move the mouse to orbit; Esc to quit
+```
+
+### Linux (without Nix)
+
+Install the dependencies with your package manager, then build:
+
+```sh
+# Debian/Ubuntu
+sudo apt install build-essential pkg-config libgl1-mesa-dev
+#   raylib 5.5 may not be packaged; if `pkg-config --exists raylib` fails,
+#   build it from source: https://github.com/raysan5/raylib/wiki
+
+# Fedora
+sudo dnf install gcc make pkgconf-pkg-config raylib-devel mesa-libGL-devel
+
+# Arch
+sudo pacman -S base-devel pkgconf raylib mesa
+
+make
+./blackhole
+```
+
+If raylib isn't available via your package manager, build it from source
+(see the [raylib wiki](https://github.com/raysan5/raylib/wiki)) and make sure
+`pkg-config --cflags --libs raylib` resolves.
+
+### macOS
+
+```sh
+brew install raylib pkg-config   # Xcode command line tools provide gcc/make
+```
+
+> **Note:** macOS only supports OpenGL up to 4.1 and has **no compute shader
+> support**, so the GPU ray-traced black hole / lensing won't run there. The
+> spacetime mesh and accretion disk will still render. Linux or Windows with a
+> GL 4.3 GPU is recommended for the full effect.
+
+### Windows
+
+Use [MSYS2](https://www.msys2.org/) (MinGW-w64 shell):
+
+```sh
+pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-make \
+          mingw-w64-x86_64-pkgconf mingw-w64-x86_64-raylib
+mingw32-make
+./blackhole.exe
 ```
 
 ## Configuration
