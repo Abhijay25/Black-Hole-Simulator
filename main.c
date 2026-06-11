@@ -25,6 +25,8 @@ typedef struct {
     float camRight[4];
     float camUp[4];
     float camFwd[4];
+    float objPosRadius[3][4];  // per object: xyz = centre, w = radius
+    float objColor[3][4];      // per object: rgb = colour
     float tanHalfFov;
     float aspect;
     float rs;
@@ -219,21 +221,33 @@ int main(void) {
     float diskR2  = 4.0f * rs_c;
     float diskThk = 0.05f * rs_c;
 
+    // Background spheres (lensed by the BH). Each row: x, y, z, radius.
+    // Tweak positions/sizes/colours here.
     Vector3 fwd   = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
     Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, camera.up));
     Vector3 up    = Vector3Normalize(Vector3CrossProduct(right, fwd));
 
     CameraUBOData uboData = {
-      .camPos     = { camera.position.x, camera.position.y, camera.position.z, 0 },
-      .camRight   = { right.x, right.y, right.z, 0 },
-      .camUp      = { up.x, up.y, up.z, 0 },
-      .camFwd     = { fwd.x, fwd.y, fwd.z, 0 },
-      .tanHalfFov = tanf(camera.fovy * 0.5f * DEG2RAD),
-      .aspect     = (float)COMPUTE_W / COMPUTE_H,
-      .rs         = rs_c,
-      .diskR1     = diskR1,
-      .diskR2     = diskR2,
-      .diskThick  = diskThk,
+      .camPos       = { camera.position.x, camera.position.y, camera.position.z, 0 },
+      .camRight     = { right.x, right.y, right.z, 0 },
+      .camUp        = { up.x, up.y, up.z, 0 },
+      .camFwd       = { fwd.x, fwd.y, fwd.z, 0 },
+      .objPosRadius = {
+        {  8.0f*rs_c,  2.0f*rs_c, -3.0f*rs_c, 1.6f*rs_c },  // big
+        { -6.0f*rs_c,  4.0f*rs_c,  5.0f*rs_c, 0.9f*rs_c },  // medium
+        {  2.0f*rs_c, -3.0f*rs_c,  9.0f*rs_c, 0.5f*rs_c },  // small
+      },
+      .objColor = {
+        { 0.90f, 0.12f, 0.08f, 1.0f },  // red
+        { 0.30f, 0.55f, 1.00f, 1.0f },  // blue
+        { 0.55f, 0.95f, 0.35f, 1.0f },  // green
+      },
+      .tanHalfFov   = tanf(camera.fovy * 0.5f * DEG2RAD),
+      .aspect       = (float)COMPUTE_W / COMPUTE_H,
+      .rs           = rs_c,
+      .diskR1       = diskR1,
+      .diskR2       = diskR2,
+      .diskThick    = diskThk,
     };
     glBindBuffer(GL_UNIFORM_BUFFER, ubo);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(CameraUBOData), &uboData);
