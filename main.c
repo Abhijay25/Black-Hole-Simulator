@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
 #include <GL/glext.h>
@@ -14,6 +15,7 @@
 #define GRID_SIZE  200.0f
 #define COMPUTE_W  480
 #define COMPUTE_H  384
+#define MAX_OBJECTS 16
 #define RENDER_SCALE 1e12f  // 1 world unit = 1 trillion metres M87
 #define BH_MASS 1.29e40 // M87
 
@@ -25,15 +27,16 @@ typedef struct {
     float camRight[4];
     float camUp[4];
     float camFwd[4];
-    float objPosRadius[3][4];  // per object: xyz = centre, w = radius
-    float objColor[3][4];      // per object: rgb = colour
+    float objPosRadius[16][4];  // per object: xyz = centre, w = radius
+    float objColor[16][4];      // per object: rgb = colour
     float tanHalfFov;
     float aspect;
     float rs;
     float diskR1;
     float diskR2;
     float diskThick;
-    float _pad[2];
+    int   numObjects;
+    float _pad;
 } CameraUBOData;
 
 static GLuint loadComputeShader(const char *path) {
@@ -74,6 +77,39 @@ static GLuint loadComputeShader(const char *path) {
     }
     glDeleteShader(shader);
     return prog;
+}
+
+// Fill the first `n` object slots with constrained-random spheres: a safe
+// distance from the BH (so none start inside the lensing/horizon region),
+// a sane size range, and a random bright colour. `rs` is the render-scale
+// Schwarzschild radius; all distances are expressed in multiples of it.
+static float frand(void) { return (float)rand() / (float)RAND_MAX; }
+
+static void spawn_objects(CameraUBOData *d, int n, float rs) {
+    if (n > MAX_OBJECTS) n = MAX_OBJECTS;
+    if (n < 0) n = 0;
+    for (int i = 0; i < n; i++) {
+        // Random direction on the unit sphere (uniform)
+        float u   = frand() * 2.0f - 1.0f;     // cos(polar)
+        float phi = frand() * 2.0f * (float)M_PI;
+        float s   = sqrtf(1.0f - u*u);
+        Vector3 dir = { s * cosf(phi), u, s * sinf(phi) };
+
+        float dist   = (6.0f + frand() * 6.0f) * rs;   // 6..12 rs from BH
+        float radius = (0.4f + frand() * 1.2f) * rs;   // 0.4..1.6 rs
+
+        d->objPosRadius[i][0] = dir.x * dist;
+        d->objPosRadius[i][1] = dir.y * dist;
+        d->objPosRadius[i][2] = dir.z * dist;
+        d->objPosRadius[i][3] = radius;
+
+        // Random bright colour (each channel 0.35..1.0)
+        d->objColor[i][0] = 0.35f + frand() * 0.65f;
+        d->objColor[i][1] = 0.35f + frand() * 0.65f;
+        d->objColor[i][2] = 0.35f + frand() * 0.65f;
+        d->objColor[i][3] = 1.0f;
+    }
+    d->numObjects = n;
 }
 
 int main(void) {
@@ -138,6 +174,20 @@ int main(void) {
   // Initialize the Black Hole
   Blackhole black_hole = blackhole_init((Vec3){0, 0, 0}, BH_MASS);
 
+  // Static scene data for the compute shader (BH + disk + objects). Filled
+  // once here; only the camera fields are updated each frame.
+  float rs_c = (float)(black_hole.EventHorizon / RENDER_SCALE);
+  CameraUBOData uboData = {
+    .tanHalfFov = tanf(camera.fovy * 0.5f * DEG2RAD),
+    .aspect     = (float)COMPUTE_W / COMPUTE_H,
+    .rs         = rs_c,
+    .diskR1     = 1.5f * rs_c,
+    .diskR2     = 4.0f * rs_c,
+    .diskThick  = 0.065f * rs_c,
+  };
+  srand((unsigned)time(NULL));   // remove for a fixed layout each run
+  spawn_objects(&uboData, 5, rs_c);   // change 5 to spawn more/fewer
+
   int firstFrame = 1;  // ignore the startup mouse spike
 
   while(!WindowShouldClose()) {
@@ -191,10 +241,10 @@ int main(void) {
         DrawSphere((Vector3){0, 0, 0}, rs, BLACK);
 
         // Accretion Disc
-        float innerR = 1.5f * rs;
-        float outerR = 4.0f * rs;
-        float slices = 64.0f;
-        float sliceStep = 2 * M_PI / slices;
+        // float innerR = 1.5f * rs;
+        // float outerR = 4.0f * rs;
+        // float slices = 64.0f;
+        // float sliceStep = 2 * M_PI / slices;
 
         // Split the Disc into Trapezoids
         // Render Trapezoid as 2 Triangles
@@ -215,40 +265,19 @@ int main(void) {
       EndMode3D();
     EndTextureMode();
 
-    // Compute shader: GPU geodesic ray tracing for BH shadow + lensed disk
-    float rs_c    = (float)(black_hole.EventHorizon / RENDER_SCALE);
-    float diskR1  = 1.5f * rs_c;
-    float diskR2  = 4.0f * rs_c;
-    float diskThk = 0.05f * rs_c;
-
-    // Background spheres (lensed by the BH). Each row: x, y, z, radius.
-    // Tweak positions/sizes/colours here.
+    // Compute shader: update only the camera fields each frame (scene data
+    // and objects were filled once before the loop).
     Vector3 fwd   = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
     Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, camera.up));
     Vector3 up    = Vector3Normalize(Vector3CrossProduct(right, fwd));
 
-    CameraUBOData uboData = {
-      .camPos       = { camera.position.x, camera.position.y, camera.position.z, 0 },
-      .camRight     = { right.x, right.y, right.z, 0 },
-      .camUp        = { up.x, up.y, up.z, 0 },
-      .camFwd       = { fwd.x, fwd.y, fwd.z, 0 },
-      .objPosRadius = {
-        {  8.0f*rs_c,  2.0f*rs_c, -3.0f*rs_c, 1.6f*rs_c },  // big
-        { -6.0f*rs_c,  4.0f*rs_c,  5.0f*rs_c, 0.9f*rs_c },  // medium
-        {  2.0f*rs_c, -3.0f*rs_c,  9.0f*rs_c, 0.5f*rs_c },  // small
-      },
-      .objColor = {
-        { 0.90f, 0.12f, 0.08f, 1.0f },  // red
-        { 0.30f, 0.55f, 1.00f, 1.0f },  // blue
-        { 0.55f, 0.95f, 0.35f, 1.0f },  // green
-      },
-      .tanHalfFov   = tanf(camera.fovy * 0.5f * DEG2RAD),
-      .aspect       = (float)COMPUTE_W / COMPUTE_H,
-      .rs           = rs_c,
-      .diskR1       = diskR1,
-      .diskR2       = diskR2,
-      .diskThick    = diskThk,
-    };
+    uboData.camPos[0]   = camera.position.x;
+    uboData.camPos[1]   = camera.position.y;
+    uboData.camPos[2]   = camera.position.z;
+    uboData.camRight[0] = right.x; uboData.camRight[1] = right.y; uboData.camRight[2] = right.z;
+    uboData.camUp[0]    = up.x;    uboData.camUp[1]    = up.y;    uboData.camUp[2]    = up.z;
+    uboData.camFwd[0]   = fwd.x;   uboData.camFwd[1]   = fwd.y;   uboData.camFwd[2]   = fwd.z;
+
     glBindBuffer(GL_UNIFORM_BUFFER, ubo);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(CameraUBOData), &uboData);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);

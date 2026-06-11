@@ -3,22 +3,23 @@ layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(binding = 0, rgba8) writeonly uniform image2D outImage;
 
-#define NUM_OBJECTS 3
+#define MAX_OBJECTS 16
 
 layout(std140, binding = 1) uniform SceneUBO {
     vec4  camPos;
     vec4  camRight;
     vec4  camUp;
     vec4  camFwd;
-    vec4  objPosRadius[NUM_OBJECTS];  // xyz = sphere centre, w = radius
-    vec4  objColor[NUM_OBJECTS];      // rgb = sphere colour
+    vec4  objPosRadius[MAX_OBJECTS];  // xyz = sphere centre, w = radius
+    vec4  objColor[MAX_OBJECTS];      // rgb = sphere colour
     float tanHalfFov;
     float aspect;
     float rs;
     float diskR1;
     float diskR2;
     float diskThick;   // half-thickness of the disk slab
-    float _p1; float _p2;
+    int   numObjects;  // how many entries in the arrays are active
+    float _p2;
 };
 
 // Adaptive integration: big steps far from the BH, tiny steps near it.
@@ -129,7 +130,7 @@ void main() {
         // Background spheres (lensed because the ray is already bent).
         // Test all of them this step and take the nearest hit to `prev`.
         float bestD = 1e30;
-        for (int o = 0; o < NUM_OBJECTS; o++) {
+        for (int o = 0; o < numObjects; o++) {
             vec3 h;
             if (hitsSphere(prev, cur, objPosRadius[o].xyz, objPosRadius[o].w, h)) {
                 float d = distance(prev, h);
