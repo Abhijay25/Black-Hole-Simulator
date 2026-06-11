@@ -1,6 +1,6 @@
 #ifndef RAY_H
 #define RAY_H
-#define MAX_PATH 100
+#define MAX_PATH 10000
 
 #include "vec3.h"
 #include "blackhole.h"
@@ -21,11 +21,14 @@ typedef struct {
     Vec3 path[MAX_PATH];
     int path_index;
     int trail_count;
+    double E; //Conserved Energy
 } Photon;
 
-Photon photon_init(Vec3 origin, Vec3 direction);
+Photon photon_init(Vec3 origin, Vec3 direction, double EventHorizon);
 void photon_draw(Photon ray, Viewport vp);
 void step(Photon *ray, Blackhole *bh, double lambda);
-void geodesic(Photon *ray, Blackhole *bh);
+void geodesic(Photon *ray, double rhs[6], Blackhole *bh);
+void rk4step(Photon *ray, double lambda, Blackhole *bh);
+void addState(const double a[6], const double b[6], double factor, double out[6]);
 
 #endif // RAY_H

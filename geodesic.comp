@@ -1,0 +1,132 @@
+#version 430
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, rgba8) writeonly uniform image2D outImage;
+
+layout(std140, binding = 1) uniform SceneUBO {
+    vec4  camPos;
+    vec4  camRight;
+    vec4  camUp;
+    vec4  camFwd;
+    float tanHalfFov;
+    float aspect;
+    float rs;
+    float diskR1;
+    float diskR2;
+    float diskThick;   // half-thickness of the disk slab
+    float _p1; float _p2;
+};
+
+// Adaptive integration: big steps far from the BH, tiny steps near it.
+// Step length scales with distance to the horizon so a ray gets enough
+// total "reach" (in units of rs) to wrap around and hit the far disk,
+// without spending all its steps far away where spacetime is ~flat.
+const float STEP_FACTOR = 0.08;   // dL = STEP_FACTOR * (r - rs)
+const float STEP_MIN    = 0.02;   // floor near the horizon (accuracy)
+const float STEP_MAX    = 16.0;   // ceiling far away (don't overshoot disk)
+const int   MAX_STEPS   = 5000;
+const float ESCAPE_R    = 1200.0;
+
+// A photon orbit around a Schwarzschild BH stays in ONE plane (spherical
+// symmetry). We rotate each ray into its own orbital plane and integrate a
+// 2D equatorial geodesic there: theta is permanently 90deg, so sin(theta)=1
+// and the polar coordinate singularity simply cannot occur. State is
+// (r, phi, dr, dphi); E is the conserved energy.
+struct Ray2 { float r, phi, dr, dphi, E; };
+
+// Equatorial Schwarzschild geodesic RHS (theta = pi/2 => sin=1, cos=0).
+// d1 = (dr, dphi); d2 = (d2r, d2phi).
+void rhs(Ray2 s, out vec2 d1, out vec2 d2) {
+    float f  = 1.0 - rs / s.r;
+    float eF = s.E / f;
+    d1 = vec2(s.dr, s.dphi);
+    d2.x = -(rs/(2.0*s.r*s.r)) * f * eF*eF
+           + (rs/(2.0*s.r*s.r*f)) * s.dr*s.dr
+           + s.r * s.dphi*s.dphi;
+    d2.y = -2.0 * s.dr * s.dphi / s.r;
+}
+
+void rk4(inout Ray2 s, float dL) {
+    vec2 a1,b1; rhs(s, a1, b1);
+    Ray2 m = s;
+    m.r += 0.5*dL*a1.x; m.phi += 0.5*dL*a1.y; m.dr += 0.5*dL*b1.x; m.dphi += 0.5*dL*b1.y;
+    vec2 a2,b2; rhs(m, a2, b2);
+    m = s;
+    m.r += 0.5*dL*a2.x; m.phi += 0.5*dL*a2.y; m.dr += 0.5*dL*b2.x; m.dphi += 0.5*dL*b2.y;
+    vec2 a3,b3; rhs(m, a3, b3);
+    m = s;
+    m.r += dL*a3.x; m.phi += dL*a3.y; m.dr += dL*b3.x; m.dphi += dL*b3.y;
+    vec2 a4,b4; rhs(m, a4, b4);
+
+    s.r    += dL*(a1.x + 2.0*a2.x + 2.0*a3.x + a4.x)/6.0;
+    s.phi  += dL*(a1.y + 2.0*a2.y + 2.0*a3.y + a4.y)/6.0;
+    s.dr   += dL*(b1.x + 2.0*b2.x + 2.0*b3.x + b4.x)/6.0;
+    s.dphi += dL*(b1.y + 2.0*b2.y + 2.0*b3.y + b4.y)/6.0;
+}
+
+void main() {
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz  = imageSize(outImage);
+    if (pix.x >= sz.x || pix.y >= sz.y) return;
+
+    // Pixel -> world ray direction
+    float u = (2.0*(pix.x + 0.5)/sz.x - 1.0) * aspect * tanHalfFov;
+    float v = (1.0 - 2.0*(pix.y + 0.5)/sz.y) * tanHalfFov;
+    vec3  dir = normalize(u*camRight.xyz + v*camUp.xyz + camFwd.xyz);
+    vec3  O   = camPos.xyz;
+
+    // Build the orbital plane basis (e1 along the camera, e2 in-plane toward dir)
+    float r0 = length(O);
+    vec3  e1 = O / r0;
+    vec3  nrm = cross(O, dir);
+    float nl  = length(nrm);
+    vec3  e2;
+    if (nl < 1e-6) {
+        // Ray points straight at/away from the BH: any perpendicular works
+        e2 = normalize(abs(e1.x) < 0.9 ? cross(e1, vec3(1,0,0)) : cross(e1, vec3(0,1,0)));
+    } else {
+        vec3 n = nrm / nl;
+        e2 = normalize(cross(n, e1));
+    }
+
+    // Initial 2D state in the orbital plane
+    Ray2 s;
+    s.r    = r0;
+    s.phi  = 0.0;
+    s.dr   = dot(dir, e1);
+    s.dphi = dot(dir, e2) / r0;
+    float f0 = 1.0 - rs / s.r;
+    s.E = f0 * sqrt(max(0.0, (s.dr*s.dr)/f0 + s.r*s.r*s.dphi*s.dphi));
+
+    vec3  prev = O;
+    bool  hitBH = false, hitDisk = false;
+    float hitR = 0.0;
+
+    for (int i = 0; i < MAX_STEPS; i++) {
+        if (s.r <= rs) { hitBH = true; break; }
+        float dL = clamp(STEP_FACTOR * (s.r - rs), STEP_MIN, STEP_MAX);
+        rk4(s, dL);
+
+        vec3 cur = s.r * (cos(s.phi)*e1 + sin(s.phi)*e2);
+        // Disk = slab of half-thickness diskThick around the y=0 plane,
+        // between diskR1 and diskR2.
+        float rad = length(vec2(cur.x, cur.z));
+        if (abs(cur.y) <= diskThick && rad >= diskR1 && rad <= diskR2) {
+            hitDisk = true; hitR = rad; break;
+        }
+        prev = cur;
+        if (s.r > ESCAPE_R) break;
+    }
+
+    vec4 color = vec4(0.0);  // transparent -> mesh shows through
+    if (hitBH) {
+        color = vec4(0.0, 0.0, 0.0, 1.0);
+    } else if (hitDisk) {
+        float t = clamp((hitR - diskR1) / (diskR2 - diskR1), 0.0, 1.0);
+        // Inner hot (bright yellow) -> outer cool (deep red)
+        vec3 dc = mix(vec3(1.0, 0.9, 0.35), vec3(0.95, 0.18, 0.0), t);
+        color = vec4(dc, 1.0);
+    }
+
+    imageStore(outImage, pix, color);
+}
